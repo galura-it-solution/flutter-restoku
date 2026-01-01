@@ -8,25 +8,67 @@ import 'package:slims/presentation/@shared/widgets/buttons/custom_button.dart';
 import 'package:slims/presentation/@shared/widgets/form_validation/app_input_text.dart';
 import 'package:slims/presentation/login/controllers/login.controller.dart';
 
-class FormLogin extends StatelessWidget {
+class FormLogin extends StatefulWidget {
   const FormLogin({super.key, required this.controller, required this.width});
 
   final LoginController controller;
   final double width;
 
   @override
+  State<FormLogin> createState() => _FormLoginState();
+}
+
+class _FormLoginState extends State<FormLogin> {
+  final GlobalKey<FormBuilderState> _formKey = GlobalKey<FormBuilderState>();
+  late final FocusNode _emailFocus;
+  late final FocusNode _passwordFocus;
+  late final FocusNode _otpFocus;
+
+  @override
+  void initState() {
+    super.initState();
+    _emailFocus = FocusNode();
+    _passwordFocus = FocusNode();
+    _otpFocus = FocusNode();
+
+    _emailFocus.addListener(() {
+      if (_emailFocus.hasFocus) {
+        widget.controller.scrollToFocus(_emailFocus);
+      }
+    });
+    _passwordFocus.addListener(() {
+      if (_passwordFocus.hasFocus) {
+        widget.controller.scrollToFocus(_passwordFocus);
+      }
+    });
+    _otpFocus.addListener(() {
+      if (_otpFocus.hasFocus) {
+        widget.controller.scrollToFocus(_otpFocus);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _emailFocus.dispose();
+    _passwordFocus.dispose();
+    _otpFocus.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return FormBuilder(
-      key: controller.formKey,
+      key: _formKey,
       child: Column(
         children: [
           Obx(
-            () => controller.awaitingOtp.value
+            () => widget.controller.awaitingOtp.value
                 ? const SizedBox.shrink()
                 : Column(
                     children: [
                       AppInputText(
-                        focusNode: controller.emailFocus,
+                        focusNode: _emailFocus,
                         name: 'email',
                         label: 'Email',
                         type: 'email',
@@ -49,10 +91,10 @@ class FormLogin extends StatelessWidget {
                   ),
           ),
           Obx(
-            () => controller.awaitingOtp.value
+            () => widget.controller.awaitingOtp.value
                 ? const SizedBox.shrink()
                 : AppInputText(
-                    focusNode: controller.passwordFocus,
+                    focusNode: _passwordFocus,
                     name: 'password',
                     label: 'Password',
                     type: 'password',
@@ -69,12 +111,12 @@ class FormLogin extends StatelessWidget {
                   ),
           ),
           Obx(
-            () => controller.awaitingOtp.value
+            () => widget.controller.awaitingOtp.value
                 ? Column(
                     children: [
                       const SizedBox(height: 10),
                       AppInputText(
-                        focusNode: controller.otpFocus,
+                        focusNode: _otpFocus,
                         name: 'otp',
                         label: 'Kode OTP',
                         type: 'text',
@@ -96,7 +138,7 @@ class FormLogin extends StatelessWidget {
                       const SizedBox(height: 8),
                       Obx(
                         () {
-                          final seconds = controller.otpCountdown.value;
+                          final seconds = widget.controller.otpCountdown.value;
                           return Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
@@ -112,7 +154,7 @@ class FormLogin extends StatelessWidget {
                               TextButton(
                                 onPressed: seconds > 0
                                     ? null
-                                    : controller.resendOtp,
+                                    : widget.controller.resendOtp,
                                 child: const Text('Kirim Ulang'),
                               ),
                             ],
@@ -120,12 +162,12 @@ class FormLogin extends StatelessWidget {
                         },
                       ),
                       Obx(
-                        () => controller.otpError.value.isEmpty
+                        () => widget.controller.otpError.value.isEmpty
                             ? const SizedBox.shrink()
                             : Align(
                                 alignment: Alignment.centerLeft,
                                 child: Text(
-                                  controller.otpError.value,
+                                  widget.controller.otpError.value,
                                   style: const TextStyle(
                                     color: MasterColor.white,
                                     fontSize: 12,
@@ -157,14 +199,14 @@ class FormLogin extends StatelessWidget {
                 child: Obx(
                   () => CustomButton(
                     onPressed: () {
-                      controller.submitForm();
+                      widget.controller.submitForm(_formKey);
                     },
-                    text: controller.awaitingOtp.value
+                    text: widget.controller.awaitingOtp.value
                         ? 'Verifikasi'
                         : 'Kirim OTP',
                     height: 50,
                     borderRadius: 10,
-                    loading: controller.loading.value,
+                    loading: widget.controller.loading.value,
                   ),
                 ),
               ),

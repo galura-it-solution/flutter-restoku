@@ -10,42 +10,26 @@ import 'package:slims/infrastructure/data/restApi/auth/repository/auth.repositor
 import 'package:slims/infrastructure/navigation/routes.dart';
 
 class LoginController extends GetxController {
-  final GlobalKey<FormBuilderState> formKey = GlobalKey<FormBuilderState>();
-
   final scrollController = ScrollController();
-  final emailFocus = FocusNode();
-  final passwordFocus = FocusNode();
-  final otpFocus = FocusNode();
   final loading = false.obs;
   final awaitingOtp = false.obs;
   final otpCountdown = 0.obs;
   final otpError = ''.obs;
   Timer? _otpTimer;
+  bool _isDisposed = false;
   String _cachedEmail = '';
   String _cachedPassword = '';
 
-  @override
-  void onInit() {
-    super.onInit();
-    emailFocus.addListener(() {
-      if (emailFocus.hasFocus) scrollToFocus(emailFocus);
-    });
-
-    passwordFocus.addListener(() {
-      if (passwordFocus.hasFocus) scrollToFocus(passwordFocus);
-    });
-
-    otpFocus.addListener(() {
-      if (otpFocus.hasFocus) scrollToFocus(otpFocus);
-    });
-  }
-
   void scrollToFocus(FocusNode focusNode, {double gap = 20}) {
     Future.delayed(const Duration(milliseconds: 300), () {
+      if (_isDisposed) return;
       if (!scrollController.hasClients) return;
 
-      final object = focusNode.context?.findRenderObject();
-      if (object is RenderBox) {
+      final context = focusNode.context;
+      if (context == null || !context.mounted) return;
+
+      final object = context.findRenderObject();
+      if (object is RenderBox && object.attached) {
         final yPosition = object.localToGlobal(Offset.zero).dy;
         final scrollOffset = scrollController.offset + yPosition - gap;
 
@@ -58,7 +42,7 @@ class LoginController extends GetxController {
     });
   }
 
-  void submitForm() async {
+  void submitForm(GlobalKey<FormBuilderState> formKey) async {
     try {
       loading.value = true;
       final baseUrl = SecureStorageHelper.generateBaseUrl();
@@ -69,6 +53,7 @@ class LoginController extends GetxController {
         final email = values["email"]?.toString() ?? '';
         final password = values["password"]?.toString() ?? '';
         final otp = values["otp"]?.toString() ?? '';
+        final emailForOtp = awaitingOtp.value ? _cachedEmail : email;
 
         if (!awaitingOtp.value) {
           final result = await loginRepository.login(email, password);
@@ -88,7 +73,7 @@ class LoginController extends GetxController {
           return;
         }
 
-        final result = await loginRepository.verifyOtp(email, otp);
+        final result = await loginRepository.verifyOtp(emailForOtp, otp);
         if (result.code >= 200 && result.code < 300) {
           final token = result.data['token']?.toString() ?? '';
           await SecureStorageHelper.saveAccessToken(token);
@@ -143,9 +128,7 @@ class LoginController extends GetxController {
 
   @override
   void onClose() {
-    emailFocus.dispose();
-    passwordFocus.dispose();
-    otpFocus.dispose();
+    _isDisposed = true;
     scrollController.dispose();
     _otpTimer?.cancel();
     super.onClose();

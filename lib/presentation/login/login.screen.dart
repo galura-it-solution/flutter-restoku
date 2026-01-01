@@ -12,39 +12,41 @@ class LoginScreen extends GetView<LoginController> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: FoodBackground(
-        imagePath: 'lib/assets/images/food_bg_2.jpg',
-        overlayDark: 0.25,
-        overlayLight: 0.85,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final width = constraints.maxWidth;
-            final height = constraints.maxHeight;
-            final isPortrait = height > width;
+      body: SizedBox.expand(
+        child: FoodBackground(
+          imagePath: 'lib/assets/images/food_bg_2.jpg',
+          overlayDark: 0.25,
+          overlayLight: 0.85,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final width = constraints.maxWidth;
+              final height = constraints.maxHeight;
+              final isPortrait = height > width;
 
-            return SingleChildScrollView(
-              controller: controller.scrollController,
-              padding: EdgeInsets.only(
-                left: 20,
-                right: 20,
-                top: isPortrait ? 80 : 40,
-                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-              ),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 480),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const _BrandHeader(),
-                      const SizedBox(height: 24),
-                      FormLogin(controller: controller, width: width),
-                    ],
+              return SingleChildScrollView(
+                controller: controller.scrollController,
+                padding: EdgeInsets.only(
+                  left: 20,
+                  right: 20,
+                  top: isPortrait ? 80 : 40,
+                  bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+                ),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 480),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const _BrandHeader(),
+                        const SizedBox(height: 24),
+                        FormLogin(controller: controller, width: width),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            );
-          },
+              );
+            },
+          ),
         ),
       ),
     );

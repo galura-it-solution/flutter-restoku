@@ -17,6 +17,7 @@ class RegisterController extends GetxController {
   final passwordConfirmFocus = FocusNode();
 
   final loading = false.obs;
+  bool _isDisposed = false;
 
   @override
   void onInit() {
@@ -37,10 +38,14 @@ class RegisterController extends GetxController {
 
   void scrollToFocus(FocusNode focusNode, {double gap = 20}) {
     Future.delayed(const Duration(milliseconds: 300), () {
+      if (_isDisposed) return;
       if (!scrollController.hasClients) return;
 
-      final object = focusNode.context?.findRenderObject();
-      if (object is RenderBox) {
+      final context = focusNode.context;
+      if (context == null || !context.mounted) return;
+
+      final object = context.findRenderObject();
+      if (object is RenderBox && object.attached) {
         final yPosition = object.localToGlobal(Offset.zero).dy;
         final scrollOffset = scrollController.offset + yPosition - gap;
 
@@ -92,6 +97,7 @@ class RegisterController extends GetxController {
 
   @override
   void onClose() {
+    _isDisposed = true;
     nameFocus.dispose();
     emailFocus.dispose();
     passwordFocus.dispose();
