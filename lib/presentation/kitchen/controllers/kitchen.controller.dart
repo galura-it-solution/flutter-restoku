@@ -75,6 +75,9 @@ class KitchenController extends GetxController {
       fetchOrders();
     });
     ordersEventsService.ensureConnected();
+    if (!ordersEventsService.isConnected) {
+      _markSseDisconnected();
+    }
 
     scrollController.addListener(() {
       if (scrollController.position.pixels >=

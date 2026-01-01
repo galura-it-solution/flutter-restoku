@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -12,6 +11,7 @@ import 'package:slims/infrastructure/data/restApi/restoku/model/menu.model.dart'
 import 'package:slims/infrastructure/data/restApi/restoku/model/table.model.dart';
 import 'package:slims/infrastructure/data/restApi/restoku/service/order.service.dart';
 import 'package:slims/infrastructure/data/restApi/restoku/service/table.service.dart';
+import 'package:slims/infrastructure/data/restApi/restoku/service/tables_events.service.dart';
 import 'package:slims/presentation/home/controllers/home.controller.dart';
 import 'package:slims/presentation/keranjang/models/cart_item.dart';
 import 'package:slims/presentation/keranjang/controllers/ongoing_orders.controller.dart';
@@ -31,16 +31,15 @@ class KeranjangController extends GetxController {
   String _lastIdempotencyKey = '';
   String _lastOrderSignature = '';
   bool _suppressIdempotencyReset = true;
-  Timer? _tableSseReconnectTimer;
-  StreamSubscription<String>? _tableStreamSub;
-  HttpClient? _tableClient;
-  int _tableSseAttempts = 0;
+  StreamSubscription<String>? _tableEventsSub;
+  StreamSubscription<bool>? _tableConnectionSub;
   DateTime? _lastTableRefresh;
   Timer? _tablePollTimer;
   bool _tableSseHealthy = false;
 
   late final OrderService orderService;
   late final TableService tableService;
+  late final TablesEventsService tablesEventsService;
 
   @override
   void onInit() {
@@ -48,13 +47,37 @@ class KeranjangController extends GetxController {
     final baseUrl = SecureStorageHelper.generateBaseUrl();
     orderService = OrderService(baseUrl: baseUrl);
     tableService = TableService(baseUrl: baseUrl);
+    tablesEventsService = Get.isRegistered<TablesEventsService>()
+        ? Get.find<TablesEventsService>()
+        : Get.put(TablesEventsService(), permanent: true);
     _loadIdempotencyFromStorage();
     setDataCartFromStorage().whenComplete(() {
       _suppressIdempotencyReset = false;
       _syncIdempotencyWithCurrentCart();
     });
     fetchTables();
-    _startTableStream();
+    _tableConnectionSub =
+        tablesEventsService.connectionChanges.listen((connected) {
+      if (connected) {
+        _markTableSseConnected();
+      } else {
+        _markTableSseDisconnected();
+      }
+    });
+    _tableEventsSub = tablesEventsService.events.listen((payload) {
+      if (payload == 'ping') return;
+      final now = DateTime.now();
+      if (_lastTableRefresh != null &&
+          now.difference(_lastTableRefresh!) < const Duration(seconds: 1)) {
+        return;
+      }
+      _lastTableRefresh = now;
+      fetchTables(silent: true);
+    });
+    tablesEventsService.ensureConnected();
+    if (!tablesEventsService.isConnected) {
+      _markTableSseDisconnected();
+    }
 
     ever(listCart, (_) {
       SharedPrefsHelper.saveModel(
@@ -146,82 +169,6 @@ class KeranjangController extends GetxController {
     }
   }
 
-  Future<void> _startTableStream() async {
-    await _tableStreamSub?.cancel();
-    _tableStreamSub = null;
-    _tableSseReconnectTimer?.cancel();
-    _tableSseReconnectTimer = null;
-    _tableClient?.close(force: true);
-    _tableClient = HttpClient();
-
-    final token = await SecureStorageHelper.getAccessToken() ?? '';
-    if (token.isEmpty) {
-      debugPrint('[Keranjang] Table SSE skipped: empty token');
-      _markTableSseDisconnected();
-      _scheduleTableReconnect();
-      return;
-    }
-
-    final uri = Uri.parse(
-      '${SecureStorageHelper.generateBaseUrl()}/api/v1/tables/events',
-    );
-    debugPrint('[Keranjang] Table SSE connect => $uri');
-
-    try {
-      final request = await _tableClient!.getUrl(uri);
-      request.headers.set('Authorization', 'Bearer $token');
-      request.headers.set('Accept', 'text/event-stream');
-
-      final response = await request.close();
-      if (response.statusCode != 200) {
-        debugPrint(
-          '[Keranjang] Table SSE failed with status ${response.statusCode} '
-          '(${response.reasonPhrase})',
-        );
-        _markTableSseDisconnected();
-        _scheduleTableReconnect();
-        return;
-      }
-
-      _tableSseAttempts = 0;
-      _markTableSseConnected();
-      debugPrint('[Keranjang] Table SSE connected');
-      _tableStreamSub = response
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .listen(
-            (line) {
-              if (!line.startsWith('data:')) return;
-              final payload = line.replaceFirst('data:', '').trim();
-              if (payload.isEmpty || payload == 'ping') return;
-              final now = DateTime.now();
-              if (_lastTableRefresh != null &&
-                  now.difference(_lastTableRefresh!) <
-                      const Duration(seconds: 1)) {
-                return;
-              }
-              _lastTableRefresh = now;
-              fetchTables();
-            },
-            onError: (error) {
-              debugPrint('[Keranjang] Table SSE error: $error');
-              _markTableSseDisconnected();
-              _scheduleTableReconnect();
-            },
-            onDone: () {
-              debugPrint('[Keranjang] Table SSE connection closed');
-              _markTableSseDisconnected();
-              _scheduleTableReconnect();
-            },
-            cancelOnError: true,
-          );
-    } catch (_) {
-      debugPrint('[Keranjang] Table SSE connection failed');
-      _markTableSseDisconnected();
-      _scheduleTableReconnect();
-    }
-  }
-
   void _markTableSseConnected() {
     if (_tableSseHealthy) return;
     _tableSseHealthy = true;
@@ -235,18 +182,6 @@ class KeranjangController extends GetxController {
     }
     _tableSseHealthy = false;
     _startTablePolling();
-  }
-
-  void _scheduleTableReconnect() {
-    if (_tableSseReconnectTimer?.isActive ?? false) return;
-    debugPrint('[Keranjang] Table SSE reconnect scheduled');
-    _tableSseAttempts = (_tableSseAttempts + 1).clamp(1, 6);
-    final backoff = 2 << (_tableSseAttempts - 1);
-    final delaySeconds = backoff > 30 ? 30 : backoff;
-
-    _tableSseReconnectTimer = Timer(Duration(seconds: delaySeconds), () async {
-      await _startTableStream();
-    });
   }
 
   void _startTablePolling() {
@@ -541,9 +476,8 @@ class KeranjangController extends GetxController {
 
   @override
   void onClose() {
-    _tableSseReconnectTimer?.cancel();
-    _tableStreamSub?.cancel();
-    _tableClient?.close(force: true);
+    _tableEventsSub?.cancel();
+    _tableConnectionSub?.cancel();
     _tablePollTimer?.cancel();
     super.onClose();
   }

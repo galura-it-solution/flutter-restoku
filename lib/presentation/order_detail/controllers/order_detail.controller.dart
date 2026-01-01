@@ -52,6 +52,9 @@ class OrderDetailController extends GetxController {
         } catch (_) {}
       });
       ordersEventsService.ensureConnected();
+      if (!ordersEventsService.isConnected) {
+        _markSseDisconnected(orderId);
+      }
     }
   }
 

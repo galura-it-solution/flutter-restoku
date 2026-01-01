@@ -53,6 +53,9 @@ class OngoingOrdersController extends GetxController {
       );
     });
     ordersEventsService.ensureConnected();
+    if (!ordersEventsService.isConnected) {
+      _markSseDisconnected();
+    }
 
     scrollController.addListener(() {
       if (scrollController.position.pixels >=

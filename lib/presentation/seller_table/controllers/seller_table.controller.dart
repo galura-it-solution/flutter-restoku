@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/widgets.dart';
@@ -7,6 +8,7 @@ import 'package:slims/core/utils/api_error.dart';
 import 'package:slims/core/utils/secure_storage.dart';
 import 'package:slims/infrastructure/data/restApi/restoku/model/table.model.dart';
 import 'package:slims/infrastructure/data/restApi/restoku/service/table.service.dart';
+import 'package:slims/infrastructure/data/restApi/restoku/service/tables_events.service.dart';
 
 class SellerTableController extends GetxController {
   final tables = <TableModel>[].obs;
@@ -19,15 +21,47 @@ class SellerTableController extends GetxController {
   final page = 1.obs;
   final int perPage = 20;
   final scrollController = ScrollController();
+  Timer? _pollTimer;
+  StreamSubscription<String>? _tableEventsSub;
+  StreamSubscription<bool>? _tableConnectionSub;
+  DateTime? _lastTableRefresh;
+  bool _sseHealthy = false;
 
   late final TableService tableService;
+  late final TablesEventsService tablesEventsService;
 
   @override
   void onInit() {
     super.onInit();
     final baseUrl = SecureStorageHelper.generateBaseUrl();
     tableService = TableService(baseUrl: baseUrl);
+    tablesEventsService = Get.isRegistered<TablesEventsService>()
+        ? Get.find<TablesEventsService>()
+        : Get.put(TablesEventsService(), permanent: true);
     fetchTables();
+
+    _tableConnectionSub =
+        tablesEventsService.connectionChanges.listen((connected) {
+      if (connected) {
+        _markSseConnected();
+      } else {
+        _markSseDisconnected();
+      }
+    });
+    _tableEventsSub = tablesEventsService.events.listen((payload) {
+      if (payload == 'ping') return;
+      final now = DateTime.now();
+      if (_lastTableRefresh != null &&
+          now.difference(_lastTableRefresh!) < const Duration(seconds: 1)) {
+        return;
+      }
+      _lastTableRefresh = now;
+      fetchTables(silent: true);
+    });
+    tablesEventsService.ensureConnected();
+    if (!tablesEventsService.isConnected) {
+      _markSseDisconnected();
+    }
 
     scrollController.addListener(() {
       if (scrollController.position.pixels >=
@@ -37,13 +71,16 @@ class SellerTableController extends GetxController {
     });
   }
 
-  Future<void> fetchTables({bool loadMore = false}) async {
+  Future<void> fetchTables({bool loadMore = false, bool silent = false}) async {
     if (loadMore) {
       if (isLoadingMore.value || !hasMore.value) return;
       isLoadingMore.value = true;
-    } else {
+    } else if (!silent) {
       loading.value = true;
       errorMessage.value = '';
+      page.value = 1;
+      hasMore.value = true;
+    } else {
       page.value = 1;
       hasMore.value = true;
     }
@@ -92,6 +129,33 @@ class SellerTableController extends GetxController {
     } else {
       loading.value = false;
     }
+  }
+
+  void _markSseConnected() {
+    if (_sseHealthy) return;
+    _sseHealthy = true;
+    _stopPolling();
+  }
+
+  void _markSseDisconnected() {
+    if (!_sseHealthy) {
+      _startPolling();
+      return;
+    }
+    _sseHealthy = false;
+    _startPolling();
+  }
+
+  void _startPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      fetchTables(silent: true);
+    });
+  }
+
+  void _stopPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
   }
 
   Future<void> createTable(Map<String, dynamic> payload) async {
@@ -182,6 +246,9 @@ class SellerTableController extends GetxController {
 
   @override
   void onClose() {
+    _tableEventsSub?.cancel();
+    _tableConnectionSub?.cancel();
+    _pollTimer?.cancel();
     scrollController.dispose();
     super.onClose();
   }
