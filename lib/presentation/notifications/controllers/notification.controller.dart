@@ -21,6 +21,7 @@ class NotificationController extends GetxController {
   HttpClient? _client;
   StreamSubscription<String>? _streamSub;
   bool _sseHealthy = false;
+  String? _lastPollUpdatedAt;
 
   late final OrderService orderService;
 
@@ -139,15 +140,19 @@ class NotificationController extends GetxController {
 
   void _startPollingFallback() {
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 8), (_) async {
+    _pollTimer = Timer.periodic(const Duration(seconds: 12), (_) async {
       void applyOrders(dynamic raw) {
         if (raw == null) return;
         final data = raw is String ? json.decode(raw) : raw;
         final listData = (data['data'] as List?) ?? [];
+        _refreshLastPollFromPayload(listData);
         for (final item in listData) {
           if (item is Map<String, dynamic>) {
             final orderId = item['id'] as int?;
             final notifiedAt = item['notified_at']?.toString() ?? '';
+            if (notifiedAt.isNotEmpty) {
+              continue;
+            }
             if (orderId != null) {
               final readyKey = notifiedAt.isEmpty
                   ? '$orderId'
@@ -161,14 +166,25 @@ class NotificationController extends GetxController {
         }
       }
 
-      final result = await orderService.getOrdersByStatus(
+      final result = await orderService.pollOrders(
         status: 'done',
-        perPage: 10,
+        perPage: 20,
+        updatedAfter: _currentUpdatedAfter(),
         onUpdate: applyOrders,
       );
 
       result.fold((l) {}, (r) => applyOrders(r.data));
     });
+  }
+
+  String _currentUpdatedAfter() {
+    if (_lastPollUpdatedAt != null) {
+      return _lastPollUpdatedAt!;
+    }
+    return DateTime.now()
+        .toUtc()
+        .subtract(const Duration(seconds: 1))
+        .toIso8601String();
   }
 
   void _stopPollingFallback() {
@@ -190,6 +206,23 @@ class NotificationController extends GetxController {
       if (token.isEmpty) return;
       _startSse(token);
     });
+  }
+
+  void _refreshLastPollFromPayload(List<dynamic> listData) {
+    DateTime? latest;
+    for (final item in listData) {
+      if (item is! Map<String, dynamic>) continue;
+      final raw = item['updated_at']?.toString();
+      if (raw == null) continue;
+      final parsed = DateTime.tryParse(raw);
+      if (parsed == null) continue;
+      if (latest == null || parsed.isAfter(latest)) {
+        latest = parsed;
+      }
+    }
+    if (latest != null) {
+      _lastPollUpdatedAt = latest.toUtc().toIso8601String();
+    }
   }
 
   Future<void> _handleReady(int orderId) async {

@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -10,6 +9,7 @@ import 'package:slims/core/utils/secure_storage.dart';
 import 'package:slims/infrastructure/data/restApi/restoku/model/order.model.dart';
 import 'package:slims/infrastructure/data/restApi/restoku/model/user.model.dart';
 import 'package:slims/infrastructure/data/restApi/restoku/service/order.service.dart';
+import 'package:slims/infrastructure/data/restApi/restoku/service/orders_events.service.dart';
 import 'package:slims/infrastructure/data/restApi/restoku/service/user.service.dart';
 
 class KitchenController extends GetxController {
@@ -35,15 +35,15 @@ class KitchenController extends GetxController {
   Timer? _pollDebounce;
   Timer? _loadingTimeout;
   bool _hasLoadedOnce = false;
-  Timer? _sseReconnectTimer;
-  StreamSubscription<String>? _sseSub;
-  HttpClient? _sseClient;
-  int _sseAttempts = 0;
+  StreamSubscription<String>? _ordersEventsSub;
+  StreamSubscription<bool>? _ordersConnectionSub;
   DateTime? _lastSseRefresh;
+  String? _lastPollUpdatedAt;
   bool _sseHealthy = false;
 
   late final OrderService orderService;
   late final UserService userService;
+  late final OrdersEventsService ordersEventsService;
 
   @override
   void onInit() {
@@ -51,9 +51,30 @@ class KitchenController extends GetxController {
     final baseUrl = SecureStorageHelper.generateBaseUrl();
     orderService = OrderService(baseUrl: baseUrl);
     userService = UserService(baseUrl: baseUrl);
+    ordersEventsService = Get.isRegistered<OrdersEventsService>()
+        ? Get.find<OrdersEventsService>()
+        : Get.put(OrdersEventsService(), permanent: true);
     fetchOrders();
     fetchKitchenUsers();
-    _startSse();
+    _ordersConnectionSub =
+        ordersEventsService.connectionChanges.listen((connected) {
+      if (connected) {
+        _markSseConnected();
+      } else {
+        _markSseDisconnected();
+      }
+    });
+    _ordersEventsSub = ordersEventsService.events.listen((payload) {
+      if (payload == 'ping') return;
+      final now = DateTime.now();
+      if (_lastSseRefresh != null &&
+          now.difference(_lastSseRefresh!) < const Duration(seconds: 1)) {
+        return;
+      }
+      _lastSseRefresh = now;
+      fetchOrders();
+    });
+    ordersEventsService.ensureConnected();
 
     scrollController.addListener(() {
       if (scrollController.position.pixels >=
@@ -104,6 +125,7 @@ class KitchenController extends GetxController {
       }
       errorMessage.value = '';
       _sortOrders();
+      _refreshLastPollFromOrders(orders);
       loading.value = false;
       _hasLoadedOnce = true;
       _loadingTimeout?.cancel();
@@ -293,8 +315,8 @@ class KitchenController extends GetxController {
 
   void _startPolling() {
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 5), (_) {
-      fetchOrders();
+    _pollTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      _pollForUpdates();
     });
   }
 
@@ -318,96 +340,14 @@ class KitchenController extends GetxController {
     _startPolling();
   }
 
-  Future<void> _startSse() async {
-    await _sseSub?.cancel();
-    _sseSub = null;
-    _sseReconnectTimer?.cancel();
-    _sseReconnectTimer = null;
-    _sseClient?.close(force: true);
-    _sseClient = HttpClient();
-
-    final token = await SecureStorageHelper.getAccessToken() ?? '';
-    if (token.isEmpty) {
-      _markSseDisconnected();
-      return;
-    }
-
-    final uri = Uri.parse(
-      '${SecureStorageHelper.generateBaseUrl()}/api/v1/orders/events',
-    );
-
-    try {
-      final request = await _sseClient!.getUrl(uri);
-      request.headers.set('Authorization', 'Bearer $token');
-      request.headers.set('Accept', 'text/event-stream');
-
-      final response = await request.close();
-      if (response.statusCode != 200) {
-        debugPrint('[Kitchen] SSE failed with status ${response.statusCode}');
-        _markSseDisconnected();
-        _scheduleSseReconnect();
-        return;
-      }
-
-      _sseAttempts = 0;
-      _markSseConnected();
-      _sseSub = response
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .listen(
-            (line) {
-              if (!line.startsWith('data:')) return;
-              final payload = line.replaceFirst('data:', '').trim();
-              if (payload.isEmpty || payload == 'ping') return;
-              final now = DateTime.now();
-              if (_lastSseRefresh != null &&
-                  now.difference(_lastSseRefresh!) <
-                      const Duration(seconds: 1)) {
-                return;
-              }
-              _lastSseRefresh = now;
-              fetchOrders();
-            },
-            onError: (error) {
-              debugPrint('[Kitchen] SSE error: $error');
-              _markSseDisconnected();
-              _scheduleSseReconnect();
-            },
-            onDone: () {
-              debugPrint('[Kitchen] SSE connection closed');
-              _markSseDisconnected();
-              _scheduleSseReconnect();
-            },
-            cancelOnError: true,
-          );
-    } catch (_) {
-      debugPrint('[Kitchen] SSE connection failed');
-      _markSseDisconnected();
-      _scheduleSseReconnect();
-    }
-  }
-
-  void _scheduleSseReconnect() {
-    if (_sseReconnectTimer?.isActive ?? false) return;
-    debugPrint('[Kitchen] SSE reconnect scheduled');
-    _sseAttempts = (_sseAttempts + 1).clamp(1, 6);
-    final backoff = 2 << (_sseAttempts - 1);
-    final delaySeconds = backoff > 30 ? 30 : backoff;
-
-    _sseReconnectTimer = Timer(Duration(seconds: delaySeconds), () async {
-      await _startSse();
-    });
-  }
-
   @override
   void onClose() {
     _pollTimer?.cancel();
     _searchDebounce?.cancel();
     _pollDebounce?.cancel();
     _loadingTimeout?.cancel();
-    _sseReconnectTimer?.cancel();
-    _sseSub?.cancel();
-    _sseClient?.close(force: true);
+    _ordersEventsSub?.cancel();
+    _ordersConnectionSub?.cancel();
     searchController.dispose();
     scrollController.dispose();
     super.onClose();
@@ -431,6 +371,66 @@ class KitchenController extends GetxController {
       if (compareTime != 0) return compareTime;
       return a.id.compareTo(b.id);
     });
+  }
+
+  String _currentUpdatedAfter() {
+    if (_lastPollUpdatedAt != null) {
+      return _lastPollUpdatedAt!;
+    }
+    return DateTime.now()
+        .toUtc()
+        .subtract(const Duration(seconds: 1))
+        .toIso8601String();
+  }
+
+  void _refreshLastPollFromOrders(List<OrderModel> list) {
+    DateTime? latest;
+    for (final item in list) {
+      final candidate = item.updatedAt ?? item.createdAt;
+      if (candidate == null) continue;
+      if (latest == null || candidate.isAfter(latest)) {
+        latest = candidate;
+      }
+    }
+    if (latest != null) {
+      _lastPollUpdatedAt = latest.toUtc().toIso8601String();
+    }
+  }
+
+  void _refreshLastPollFromPayload(List<dynamic> listData) {
+    DateTime? latest;
+    for (final item in listData) {
+      if (item is! Map<String, dynamic>) continue;
+      final raw = item['updated_at']?.toString();
+      if (raw == null) continue;
+      final parsed = DateTime.tryParse(raw);
+      if (parsed == null) continue;
+      if (latest == null || parsed.isAfter(latest)) {
+        latest = parsed;
+      }
+    }
+    if (latest != null) {
+      _lastPollUpdatedAt = latest.toUtc().toIso8601String();
+    }
+  }
+
+  Future<void> _pollForUpdates() async {
+    void applyPoll(dynamic raw) {
+      if (raw == null) return;
+      final data = raw is String ? json.decode(raw) : raw;
+      final listData = (data['data'] as List?) ?? [];
+      if (listData.isEmpty) return;
+      _refreshLastPollFromPayload(listData);
+      fetchOrders();
+    }
+
+    final result = await orderService.pollOrders(
+      perPage: 50,
+      updatedAfter: _currentUpdatedAfter(),
+      onUpdate: applyPoll,
+    );
+
+    result.fold((l) {}, (r) => applyPoll(r.data));
   }
 
   List<OrderModel> get todayOrders {

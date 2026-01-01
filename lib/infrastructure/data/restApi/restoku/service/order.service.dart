@@ -86,6 +86,35 @@ class OrderService extends GetxService {
     return response;
   }
 
+  Future<dynamic> pollOrders({
+    String? status,
+    int? restaurantTableId,
+    int perPage = 20,
+    String? updatedAfter,
+    String? search,
+    bool forceRefresh = false,
+    void Function(dynamic data)? onUpdate,
+  }) async {
+    final statusParam = status == null || status.isEmpty ? '' : 'status=$status&';
+    final tableParam = restaurantTableId == null
+        ? ''
+        : 'restaurant_table_id=$restaurantTableId&';
+    final updatedAfterParam = updatedAfter == null || updatedAfter.isEmpty
+        ? ''
+        : 'updated_after=${Uri.encodeComponent(updatedAfter)}&';
+    final searchParam = search == null || search.isEmpty
+        ? ''
+        : 'search=${Uri.encodeComponent(search)}&';
+    final response = await serviceApi.getService(
+      baseUrl: baseUrl,
+      url:
+          'api/v1/orders/poll?$statusParam$tableParam$updatedAfterParam${searchParam}per_page=$perPage',
+      forceRefresh: forceRefresh,
+      onUpdate: onUpdate,
+    );
+    return response;
+  }
+
   Future<dynamic> updateOrderStatus({
     required int orderId,
     required String status,

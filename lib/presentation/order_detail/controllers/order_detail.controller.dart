@@ -1,13 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import 'package:slims/core/utils/api_error.dart';
 import 'package:slims/core/utils/secure_storage.dart';
 import 'package:slims/infrastructure/data/restApi/restoku/model/order.model.dart';
 import 'package:slims/infrastructure/data/restApi/restoku/service/order.service.dart';
+import 'package:slims/infrastructure/data/restApi/restoku/service/orders_events.service.dart';
 
 class OrderDetailController extends GetxController {
   final order = Rxn<OrderModel>();
@@ -15,12 +14,12 @@ class OrderDetailController extends GetxController {
   final errorMessage = ''.obs;
 
   late final OrderService orderService;
-  StreamSubscription<String>? _streamSub;
-  HttpClient? _client;
-  Timer? _reconnectTimer;
+  StreamSubscription<String>? _ordersEventsSub;
+  StreamSubscription<bool>? _ordersConnectionSub;
   Timer? _pollTimer;
-  int _attempts = 0;
+  String? _lastPollUpdatedAt;
   bool _sseHealthy = false;
+  late final OrdersEventsService ordersEventsService;
 
   @override
   void onInit() {
@@ -31,7 +30,28 @@ class OrderDetailController extends GetxController {
     final orderId = Get.arguments as int?;
     if (orderId != null) {
       fetchOrder(orderId);
-      _startSse(orderId);
+      ordersEventsService = Get.isRegistered<OrdersEventsService>()
+          ? Get.find<OrdersEventsService>()
+          : Get.put(OrdersEventsService(), permanent: true);
+      _ordersConnectionSub =
+          ordersEventsService.connectionChanges.listen((connected) {
+        if (connected) {
+          _markSseConnected();
+        } else {
+          _markSseDisconnected(orderId);
+        }
+      });
+      _ordersEventsSub = ordersEventsService.events.listen((payload) {
+        if (payload == 'ping') return;
+        try {
+          final data = json.decode(payload) as Map<String, dynamic>;
+          final eventId = data['id'] as int?;
+          if (eventId == orderId) {
+            fetchOrder(orderId, silent: true);
+          }
+        } catch (_) {}
+      });
+      ordersEventsService.ensureConnected();
     }
   }
 
@@ -48,6 +68,10 @@ class OrderDetailController extends GetxController {
             : data;
         order.value = OrderModel.fromJson(payload);
         errorMessage.value = '';
+        final updatedAt = order.value?.updatedAt;
+        if (updatedAt != null) {
+          _lastPollUpdatedAt = updatedAt.toUtc().toIso8601String();
+        }
         if (!silent) {
           loading.value = false;
         }
@@ -75,76 +99,6 @@ class OrderDetailController extends GetxController {
     );
   }
 
-  Future<void> _startSse(int orderId) async {
-    await _streamSub?.cancel();
-    _streamSub = null;
-    _reconnectTimer?.cancel();
-    _reconnectTimer = null;
-    _client?.close(force: true);
-    _client = HttpClient();
-
-    final token = await SecureStorageHelper.getAccessToken() ?? '';
-    if (token.isEmpty) {
-      _markSseDisconnected(orderId);
-      return;
-    }
-
-    final uri = Uri.parse(
-      '${SecureStorageHelper.generateBaseUrl()}/api/v1/orders/events',
-    );
-
-    try {
-      final request = await _client!.getUrl(uri);
-      request.headers.set('Authorization', 'Bearer $token');
-      request.headers.set('Accept', 'text/event-stream');
-
-      final response = await request.close();
-      if (response.statusCode != 200) {
-        debugPrint(
-          '[OrderDetail] SSE failed with status ${response.statusCode}',
-        );
-        _markSseDisconnected(orderId);
-        _scheduleReconnect(orderId);
-        return;
-      }
-
-      _attempts = 0;
-      _markSseConnected();
-      _streamSub = response
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .listen(
-            (line) {
-              if (!line.startsWith('data:')) return;
-              final payload = line.replaceFirst('data:', '').trim();
-              if (payload.isEmpty || payload == 'ping') return;
-              try {
-                final data = json.decode(payload) as Map<String, dynamic>;
-                final eventId = data['id'] as int?;
-                if (eventId == orderId) {
-                  fetchOrder(orderId, silent: true);
-                }
-              } catch (_) {}
-            },
-            onError: (error) {
-              debugPrint('[OrderDetail] SSE error: $error');
-              _markSseDisconnected(orderId);
-              _scheduleReconnect(orderId);
-            },
-            onDone: () {
-              debugPrint('[OrderDetail] SSE connection closed');
-              _markSseDisconnected(orderId);
-              _scheduleReconnect(orderId);
-            },
-            cancelOnError: true,
-          );
-    } catch (_) {
-      debugPrint('[OrderDetail] SSE connection failed');
-      _markSseDisconnected(orderId);
-      _scheduleReconnect(orderId);
-    }
-  }
-
   void _markSseConnected() {
     if (_sseHealthy) return;
     _sseHealthy = true;
@@ -160,21 +114,10 @@ class OrderDetailController extends GetxController {
     _startPolling(orderId);
   }
 
-  void _scheduleReconnect(int orderId) {
-    if (_reconnectTimer?.isActive ?? false) return;
-    debugPrint('[OrderDetail] SSE reconnect scheduled');
-    _attempts = (_attempts + 1).clamp(1, 6);
-    final backoff = 2 << (_attempts - 1);
-    final delaySeconds = backoff > 30 ? 30 : backoff;
-    _reconnectTimer = Timer(Duration(seconds: delaySeconds), () {
-      _startSse(orderId);
-    });
-  }
-
   void _startPolling(int orderId) {
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 8), (_) {
-      fetchOrder(orderId, silent: true);
+    _pollTimer = Timer.periodic(const Duration(seconds: 12), (_) {
+      _pollForUpdates(orderId);
     });
   }
 
@@ -185,10 +128,60 @@ class OrderDetailController extends GetxController {
 
   @override
   void onClose() {
-    _streamSub?.cancel();
-    _reconnectTimer?.cancel();
+    _ordersEventsSub?.cancel();
+    _ordersConnectionSub?.cancel();
     _pollTimer?.cancel();
-    _client?.close(force: true);
     super.onClose();
+  }
+
+  String _currentUpdatedAfter() {
+    if (_lastPollUpdatedAt != null) {
+      return _lastPollUpdatedAt!;
+    }
+    return DateTime.now()
+        .toUtc()
+        .subtract(const Duration(seconds: 1))
+        .toIso8601String();
+  }
+
+  void _refreshLastPollFromPayload(List<dynamic> listData) {
+    DateTime? latest;
+    for (final item in listData) {
+      if (item is! Map<String, dynamic>) continue;
+      final raw = item['updated_at']?.toString();
+      if (raw == null) continue;
+      final parsed = DateTime.tryParse(raw);
+      if (parsed == null) continue;
+      if (latest == null || parsed.isAfter(latest)) {
+        latest = parsed;
+      }
+    }
+    if (latest != null) {
+      _lastPollUpdatedAt = latest.toUtc().toIso8601String();
+    }
+  }
+
+  Future<void> _pollForUpdates(int orderId) async {
+    void applyPoll(dynamic raw) {
+      if (raw == null) return;
+      final data = raw is String ? json.decode(raw) : raw;
+      final listData = (data['data'] as List?) ?? [];
+      if (listData.isEmpty) return;
+      _refreshLastPollFromPayload(listData);
+      for (final item in listData) {
+        if (item is Map<String, dynamic> && item['id'] == orderId) {
+          fetchOrder(orderId, silent: true);
+          break;
+        }
+      }
+    }
+
+    final result = await orderService.pollOrders(
+      perPage: 50,
+      updatedAfter: _currentUpdatedAfter(),
+      onUpdate: applyPoll,
+    );
+
+    result.fold((l) {}, (r) => applyPoll(r.data));
   }
 }
