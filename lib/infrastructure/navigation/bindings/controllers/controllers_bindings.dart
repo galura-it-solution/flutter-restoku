@@ -1,0 +1,12 @@
+export 'package:slims/infrastructure/navigation/bindings/controllers/account.controller.binding.dart'; 
+export 'package:slims/infrastructure/navigation/bindings/controllers/beranda.controller.binding.dart'; 
+export 'package:slims/infrastructure/navigation/bindings/controllers/detail_menu.controller.binding.dart'; 
+export 'package:slims/infrastructure/navigation/bindings/controllers/home.controller.binding.dart'; 
+export 'package:slims/infrastructure/navigation/bindings/controllers/keranjang.controller.binding.dart'; 
+export 'package:slims/infrastructure/navigation/bindings/controllers/login.controller.binding.dart'; 
+export 'package:slims/infrastructure/navigation/bindings/controllers/main_menu.controller.binding.dart'; 
+export 'package:slims/infrastructure/navigation/bindings/controllers/order_history.controller.binding.dart'; 
+export 'package:slims/infrastructure/navigation/bindings/controllers/order_detail.controller.binding.dart'; 
+export 'package:slims/infrastructure/navigation/bindings/controllers/register.controller.binding.dart'; 
+export 'package:slims/infrastructure/navigation/bindings/controllers/seller_home.controller.binding.dart'; 
+export 'package:slims/infrastructure/navigation/bindings/controllers/splash_screen.controller.binding.dart'; 

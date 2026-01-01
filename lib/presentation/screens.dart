@@ -1,0 +1,13 @@
+export 'package:slims/presentation/account/account.screen.dart';
+export 'package:slims/presentation/beranda/beranda.screen.dart';
+export 'package:slims/presentation/detail_menu/detail_menu.screen.dart';
+export 'package:slims/presentation/home/home.screen.dart';
+export 'package:slims/presentation/keranjang/keranjang.screen.dart';
+export 'package:slims/presentation/login/login.screen.dart';
+export 'package:slims/presentation/main_menu/main_menu.screen.dart';
+export 'package:slims/presentation/order_history/order_history.screen.dart';
+export 'package:slims/presentation/order_detail/order_detail.screen.dart';
+export 'package:slims/presentation/register/register.screen.dart';
+export 'package:slims/presentation/seller_home/seller_home.screen.dart';
+export 'package:slims/presentation/splash_screen/splash_screen.screen.dart';
+export 'package:slims/presentation/table_scan/table_scan.screen.dart';

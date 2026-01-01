@@ -1,0 +1,15 @@
+# analysis_options.yaml
+# Konfigurasi linter & analyzer untuk Flutter terbaru
+
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    # Contoh override rules
+    avoid_print: false
+
+analyzer:
+  errors:
+    # Abaikan beberapa warning/analyzer errors tertentu
+    invalid_annotation_target: ignore
+    non_constant_identifier_names: ignore
