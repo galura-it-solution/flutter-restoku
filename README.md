@@ -1,40 +1,40 @@
 # Restoku App (Flutter)
 
-Customer and seller mobile app for Restoku.
+Aplikasi mobile Restoku untuk pelanggan dan penjual.
 
-## Features
+## Fitur Utama
 
-- Customer: browse menu, add to cart, place order, view order history and details.
-- Seller: manage menu, categories, tables, and kitchen order status.
-- Realtime: SSE notifications for completed orders with polling fallback.
+- Pelanggan: lihat menu, tambah ke keranjang, buat pesanan, cek riwayat & detail pesanan.
+- Penjual: kelola menu, kategori, meja, dan status pesanan dapur.
+- Realtime: notifikasi pesanan selesai via SSE dengan fallback polling.
 
-## Requirements
+## Kebutuhan
 
 - Flutter SDK
-- Restoku API running locally (default `http://localhost:8000`)
+- Restoku API berjalan (default `http://localhost:8000`)
 
-## Configure API Base URL
+## Konfigurasi API Base URL
 
-Update `restoku-app/lib/config.dart` to point to the API server:
+Ubah `restoku-app/lib/config.dart` agar sesuai server API:
 
 ```
 url_api: "http://localhost:8000",
 ```
 
-## Run (Dev)
+## Cara Menjalankan (Development)
 
 ```
 flutter pub get
 flutter run
 ```
 
-## Test Accounts (Local)
+## Akun Test (Local)
 
-If you ran the backend seeders:
+Jika menjalankan seeder backend:
 
 - Seller: `seller@restoku.test` / `password`
 
-Customers can register via the app and verify OTP.
+Pelanggan dapat registrasi dari aplikasi dan verifikasi OTP.
 
 ## Build (Release)
 
@@ -42,7 +42,35 @@ Customers can register via the app and verify OTP.
 flutter build apk --release --obfuscate --split-debug-info=./debug-info
 ```
 
-## Notes
+## Paket Penting, Pengaruh ke Performa & Security
 
-- Menu images use `image_url` from the API; category images use `image_url` too.
-- Order-ready notifications navigate to order detail on tap.
+- `get`: routing dan state management cepat; sederhana tapi pastikan lifecycle controller rapi agar tidak ada kebocoran state.
+- `dio` + `http`: komunikasi API; performa tergantung konfigurasi timeout/interceptor. Pastikan HTTPS di produksi.
+- `flutter_secure_storage`: menyimpan token sensitif di Keychain/Keystore; aman untuk credential, tapi aksesnya lebih lambat dibanding shared prefs.
+- `shared_preferences`: simpan data non-sensitif (flag, setting); cepat namun tidak aman untuk token.
+- `cached_network_image`: caching gambar; meningkatkan performa dan hemat bandwidth, tetapi perlu invalidasi jika gambar sering berubah.
+- `image_picker`: akses galeri/kamera; perlu izin runtime dan kebijakan privacy yang jelas.
+- `mobile_scanner`: scan QR/barcode; intensif kamera, gunakan hanya saat dibutuhkan agar baterai hemat.
+- `flutter_form_builder` + `form_builder_validators`: mempermudah validasi; ringan, tapi pastikan key Form tidak duplikat.
+- `cached_query_flutter`: caching data network; mempercepat UI, tapi perlu strategi cache agar data tetap segar.
+- `webview_flutter`: membuka konten web; isolasi konten tidak seketat native, pastikan URL terpercaya.
+- `syncfusion_flutter_pdfviewer`: rendering PDF; bisa berat di device low-end, gunakan loading state.
+- `flutter_launcher_icons`: hanya untuk generate ikon; tidak berdampak ke runtime.
+- `logger`: logging debug; matikan/kurangi di release untuk keamanan data log.
+
+## Catatan
+
+- Gambar menu dan kategori menggunakan `image_url` dari API.
+- Notifikasi pesanan siap mengarah ke halaman detail pesanan saat ditekan.
+
+## Highlight Penerapan Security & Performa
+
+Security:
+- Token disimpan di `flutter_secure_storage` (Keychain/Keystore), bukan di `shared_preferences` agar aman dari pencurian token.
+- Validasi input menggunakan `flutter_form_builder` agar data lebih terkontrol sebelum dikirim.
+- Rekomendasi produksi: gunakan HTTPS dan batasi logging sensitif.
+
+Performa:
+- Gambar di-cache dengan `cached_network_image` untuk mempercepat loading dan hemat bandwidth.
+- Data API bisa di-cache via `cached_query_flutter` agar UI responsif.
+- Alasan SSE: kebutuhan update bersifat satu arah (server -> client), lebih sederhana dari WebSocket, kompatibel dengan HTTP/proxy umum, dan lebih mudah dioperasikan tanpa infrastruktur socket khusus.
